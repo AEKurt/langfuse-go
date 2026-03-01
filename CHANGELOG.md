@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-03-01
+
+### Fixed
+- `UpdateTrace` was silently dropping `Version`, `Release`, and `Level` fields
+- `observe.go`: guard `IsNil()` with error interface type check to prevent panic on non-nilable second return values
+
+### Changed
+- Extract `traceUpsert`, `spanUpsert`, `generationUpsert` as internal named types, eliminating 4 duplicated anonymous struct definitions across `client.go` and `batch.go`
+- Simplify `handleResponse`: collapse duplicated if/else into a single condition
+- Rename `BatchEventTypeGenUpdate` to `BatchEventTypeGenerationUpdate` for naming consistency
+- Replace hardcoded `30s` timeout in `sendBatch` with the `DefaultTimeout` constant
+- Clarify `BatchProcessor.Flush()` doc comment: it only drains the channel queue; use `Stop()` for a guaranteed full flush
+
+### Added
+- Test coverage increased from 64.7% to 88.2%:
+  - New `trace_context_test.go`: `CreateTraceID`/`ObservationID` (seeded & random), `GetCurrentTraceID`/`ObservationID`, `WithPropagatedAttributes`, `GetPropagatedAttributes`, `MergePropagatedAttributes`
+  - New `observe_test.go`: `Observe` wrapper (success, error, no-return, generation type, non-function), `getFunctionName`
+  - Additional tests for `Context()`, `UpdateCurrentSpan`, `StartAsCurrentSpan`, `StartAsCurrentGeneration`, `APIError.Unwrap`, `Flush`, `Shutdown`, logger path, batch processor edge cases
+
+### Docs
+- Add `Logger` field to Config API reference in README
+- Add Observe Wrapper section to Advanced Features
+- Add Propagated Attributes section to Advanced Features
+- Add `ShutdownTimeout` to `BatchConfig` example
+- Fix error-ignored patterns in async code examples
+
 ## [0.1.5] - 2025-12-22
 
 ### Added

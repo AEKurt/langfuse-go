@@ -13,7 +13,7 @@ import (
 
 const (
 	// SDKVersion is the version of this SDK
-	SDKVersion = "0.1.4"
+	SDKVersion = "0.1.6"
 	// DefaultBaseURL is the default Langfuse API base URL
 	DefaultBaseURL = "https://cloud.langfuse.com"
 	// DefaultTimeout is the default HTTP client timeout
