@@ -153,6 +153,7 @@ Creates a new Langfuse client.
 - `config.SecretKey` (string, required): Your Langfuse secret key
 - `config.BaseURL` (string, optional): Base URL for Langfuse API (defaults to `https://cloud.langfuse.com`)
 - `config.HTTPClient` (*http.Client, optional): Custom HTTP client
+- `config.Logger` (Logger, optional): Logger interface for debugging requests/responses
 
 ### Traces
 
@@ -318,9 +319,10 @@ client, err := langfuse.NewAsyncClient(
         SecretKey: "sk-xxx",
     },
     langfuse.BatchConfig{
-        MaxBatchSize:  100,              // Flush when 100 events queued
-        FlushInterval: 5 * time.Second,  // Or flush every 5 seconds
-        MaxRetries:    3,                // Retry failed requests
+        MaxBatchSize:    100,              // Flush when 100 events queued
+        FlushInterval:   5 * time.Second,  // Or flush every 5 seconds
+        MaxRetries:      3,                // Retry failed requests
+        ShutdownTimeout: 30 * time.Second, // Max wait on shutdown
         OnError: func(err error, events []langfuse.BatchEvent) {
             log.Printf("Failed to send %d events: %v", len(events), err)
         },
@@ -329,14 +331,17 @@ client, err := langfuse.NewAsyncClient(
 if err != nil {
     log.Fatal(err)
 }
-defer client.Shutdown() // Always shutdown to flush pending events
+defer func() { _ = client.Shutdown() }() // Always shutdown to flush pending events
 
 // Async operations return immediately
 traceID, _ := client.CreateTraceAsync(langfuse.Trace{Name: "my-trace"})
 spanID, _ := client.CreateSpanAsync(langfuse.Span{TraceID: traceID, Name: "my-span"})
 
-// Force flush when needed (e.g., before response)
-client.Flush()
+// Force flush when needed (e.g., before a response)
+// Note: Flush() drains the queue channel; use Shutdown() for a guaranteed full flush.
+if err := client.Flush(); err != nil {
+    log.Printf("Flush error: %v", err)
+}
 ```
 
 ### Specialized Observation Types
@@ -383,6 +388,46 @@ if obs, ok := langfuse.GetCurrentObservation(ctx); ok {
 
 // Update current span via context
 client.UpdateCurrentSpan(ctx, output, metadata)
+```
+
+### Observe Wrapper
+
+Wrap any function to automatically capture inputs, outputs, timings, and errors:
+
+```go
+result, err := client.Observe(ctx, func(ctx context.Context) (string, error) {
+    // Your function body — ctx carries the active trace
+    return callLLM(ctx, prompt)
+}, &langfuse.ObserveOptions{
+    Name:          "llm-call",
+    AsType:        langfuse.ObservationTypeGeneration,
+    CaptureInput:  true,
+    CaptureOutput: true,
+})
+```
+
+The wrapper automatically records start/end time, output, and any error as a `statusMessage`.
+
+### Propagated Attributes
+
+Attach session/user metadata once and have it flow automatically to all child spans:
+
+```go
+// Set attributes that propagate to all observations created in this context
+ctx = langfuse.WithPropagatedAttributes(ctx, langfuse.PropagatedAttributes{
+    SessionID: "session-abc",
+    UserID:    "user-123",
+    Tags:      []string{"production"},
+    Metadata:  map[string]interface{}{"region": "us-east-1"},
+})
+
+// Merge additional attributes without losing existing ones
+ctx = langfuse.MergePropagatedAttributes(ctx, langfuse.PropagatedAttributes{
+    Tags: []string{"feature-flag-x"},
+})
+
+// StartAsCurrentSpan picks up propagated attributes automatically
+ctx, span, err := client.StartAsCurrentSpan(ctx, "my-op", input)
 ```
 
 ## Development
