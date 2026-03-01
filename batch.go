@@ -50,7 +50,7 @@ const (
 	BatchEventTypeSpan       BatchEventType = "span-create"
 	BatchEventTypeSpanUpdate BatchEventType = "span-update"
 	BatchEventTypeGeneration BatchEventType = "generation-create"
-	BatchEventTypeGenUpdate  BatchEventType = "generation-update"
+	BatchEventTypeGenerationUpdate BatchEventType = "generation-update"
 	BatchEventTypeEvent      BatchEventType = "event-create"
 	BatchEventTypeScore      BatchEventType = "score-create"
 )
@@ -202,16 +202,7 @@ func (bp *BatchProcessor) EnqueueSpan(span Span) error {
 
 // EnqueueSpanUpdate enqueues a span update event
 func (bp *BatchProcessor) EnqueueSpanUpdate(spanID string, update SpanUpdate) error {
-	body := struct {
-		ID            string                 `json:"id"`
-		Name          *string                `json:"name,omitempty"`
-		EndTime       *time.Time             `json:"endTime,omitempty"`
-		Metadata      map[string]interface{} `json:"metadata,omitempty"`
-		Input         interface{}            `json:"input,omitempty"`
-		Output        interface{}            `json:"output,omitempty"`
-		Level         *Level                 `json:"level,omitempty"`
-		StatusMessage *string                `json:"statusMessage,omitempty"`
-	}{
+	body := spanUpsert{
 		ID:            spanID,
 		Name:          update.Name,
 		EndTime:       update.EndTime,
@@ -242,21 +233,7 @@ func (bp *BatchProcessor) EnqueueGeneration(gen Generation) error {
 
 // EnqueueGenerationUpdate enqueues a generation update event
 func (bp *BatchProcessor) EnqueueGenerationUpdate(genID string, update GenerationUpdate) error {
-	body := struct {
-		ID              string                 `json:"id"`
-		Name            *string                `json:"name,omitempty"`
-		EndTime         *time.Time             `json:"endTime,omitempty"`
-		Model           *string                `json:"model,omitempty"`
-		ModelParameters map[string]interface{} `json:"modelParameters,omitempty"`
-		Input           interface{}            `json:"input,omitempty"`
-		Output          interface{}            `json:"output,omitempty"`
-		Metadata        map[string]interface{} `json:"metadata,omitempty"`
-		Level           *Level                 `json:"level,omitempty"`
-		StatusMessage   *string                `json:"statusMessage,omitempty"`
-		Usage           *Usage                 `json:"usage,omitempty"`
-		Prompt          *Prompt                `json:"prompt,omitempty"`
-		Completion      *Completion            `json:"completion,omitempty"`
-	}{
+	body := generationUpsert{
 		ID:              genID,
 		Name:            update.Name,
 		EndTime:         update.EndTime,
@@ -273,7 +250,7 @@ func (bp *BatchProcessor) EnqueueGenerationUpdate(genID string, update Generatio
 	}
 	return bp.Enqueue(BatchEvent{
 		ID:   genID,
-		Type: BatchEventTypeGenUpdate,
+		Type: BatchEventTypeGenerationUpdate,
 		Body: body,
 	})
 }
@@ -307,7 +284,9 @@ func (bp *BatchProcessor) QueueLength() int {
 	return len(bp.eventQueue)
 }
 
-// Flush forces an immediate flush of all queued events
+// Flush forces an immediate flush of events currently in the queue channel.
+// Note: events already consumed by the background processLoop into its local
+// batch buffer are not captured here. For a guaranteed full flush, use Stop().
 func (bp *BatchProcessor) Flush() error {
 	events := bp.drainQueue()
 	if len(events) == 0 {
@@ -438,7 +417,7 @@ func (bp *BatchProcessor) sendBatch(events []BatchEvent) error {
 	base.Path = joinedPath
 	requestURL := base.String()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewBuffer(jsonData))

@@ -81,7 +81,9 @@ func (c *Client) Observe(ctx context.Context, fn interface{}, opts *ObserveOptio
 		result = results[0].Interface()
 	}
 	if numOut > 1 {
-		if errVal := results[1]; !errVal.IsNil() {
+		errVal := results[1]
+		errType := reflect.TypeOf((*error)(nil)).Elem()
+		if errVal.Type().Implements(errType) && !errVal.IsNil() {
 			fnErr = errVal.Interface().(error)
 		}
 	}

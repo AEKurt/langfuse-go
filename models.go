@@ -182,3 +182,48 @@ type Completion struct {
 	Raw      string                   `json:"raw,omitempty"`
 	Messages []map[string]interface{} `json:"messages,omitempty"`
 }
+
+// traceUpsert is used internally for trace create/update (upsert) operations.
+type traceUpsert struct {
+	ID        string                 `json:"id"`
+	Name      *string                `json:"name,omitempty"`
+	UserID    *string                `json:"userId,omitempty"`
+	SessionID *string                `json:"sessionId,omitempty"`
+	Version   *string                `json:"version,omitempty"`
+	Release   *string                `json:"release,omitempty"`
+	Input     interface{}            `json:"input,omitempty"`
+	Output    interface{}            `json:"output,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	Tags      []string               `json:"tags,omitempty"`
+	Public    *bool                  `json:"public,omitempty"`
+	Level     *Level                 `json:"level,omitempty"`
+}
+
+// spanUpsert is used internally for span create/update (upsert) operations.
+type spanUpsert struct {
+	ID            string                 `json:"id"`
+	Name          *string                `json:"name,omitempty"`
+	EndTime       *time.Time             `json:"endTime,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Input         interface{}            `json:"input,omitempty"`
+	Output        interface{}            `json:"output,omitempty"`
+	Level         *Level                 `json:"level,omitempty"`
+	StatusMessage *string                `json:"statusMessage,omitempty"`
+}
+
+// generationUpsert is used internally for generation create/update (upsert) operations.
+type generationUpsert struct {
+	ID              string                 `json:"id"`
+	Name            *string                `json:"name,omitempty"`
+	EndTime         *time.Time             `json:"endTime,omitempty"`
+	Model           *string                `json:"model,omitempty"`
+	ModelParameters map[string]interface{} `json:"modelParameters,omitempty"`
+	Input           interface{}            `json:"input,omitempty"`
+	Output          interface{}            `json:"output,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	Level           *Level                 `json:"level,omitempty"`
+	StatusMessage   *string                `json:"statusMessage,omitempty"`
+	Usage           *Usage                 `json:"usage,omitempty"`
+	Prompt          *Prompt                `json:"prompt,omitempty"`
+	Completion      *Completion            `json:"completion,omitempty"`
+}

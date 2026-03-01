@@ -146,23 +146,12 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, body in
 func (c *Client) handleResponse(resp *http.Response, v interface{}, allowCreated bool) error {
 	defer func() { _ = resp.Body.Close() }()
 
-	if allowCreated {
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-			body, _ := io.ReadAll(resp.Body)
-			return &APIError{
-				StatusCode: resp.StatusCode,
-				Message:    "unexpected status code",
-				Body:       string(body),
-			}
-		}
-	} else {
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return &APIError{
-				StatusCode: resp.StatusCode,
-				Message:    "unexpected status code",
-				Body:       string(body),
-			}
+	if resp.StatusCode != http.StatusOK && !(allowCreated && resp.StatusCode == http.StatusCreated) {
+		body, _ := io.ReadAll(resp.Body)
+		return &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    "unexpected status code",
+			Body:       string(body),
 		}
 	}
 
@@ -298,26 +287,19 @@ func (c *Client) Score(ctx context.Context, score Score) (*ScoreResponse, error)
 // UpdateTrace updates an existing trace by posting with the same ID (upsert)
 func (c *Client) UpdateTrace(ctx context.Context, traceID string, trace TraceUpdate) (*TraceResponse, error) {
 	// Create a trace with the ID and update fields - Langfuse uses POST for upsert
-	updateTrace := struct {
-		ID        string                 `json:"id"`
-		Name      *string                `json:"name,omitempty"`
-		UserID    *string                `json:"userId,omitempty"`
-		SessionID *string                `json:"sessionId,omitempty"`
-		Metadata  map[string]interface{} `json:"metadata,omitempty"`
-		Tags      []string               `json:"tags,omitempty"`
-		Input     interface{}            `json:"input,omitempty"`
-		Output    interface{}            `json:"output,omitempty"`
-		Public    *bool                  `json:"public,omitempty"`
-	}{
+	updateTrace := traceUpsert{
 		ID:        traceID,
 		Name:      trace.Name,
 		UserID:    trace.UserID,
 		SessionID: trace.SessionID,
+		Version:   trace.Version,
+		Release:   trace.Release,
 		Metadata:  trace.Metadata,
 		Tags:      trace.Tags,
 		Input:     trace.Input,
 		Output:    trace.Output,
 		Public:    trace.Public,
+		Level:     trace.Level,
 	}
 
 	resp, err := c.doRequest(ctx, "POST", "/traces", updateTrace)
@@ -341,16 +323,7 @@ func (c *Client) UpdateTrace(ctx context.Context, traceID string, trace TraceUpd
 // UpdateSpan updates an existing span by posting with the same ID (upsert)
 func (c *Client) UpdateSpan(ctx context.Context, spanID string, span SpanUpdate) (*SpanResponse, error) {
 	// Create a span with the ID and update fields
-	updateSpan := struct {
-		ID            string                 `json:"id"`
-		Name          *string                `json:"name,omitempty"`
-		EndTime       *time.Time             `json:"endTime,omitempty"`
-		Metadata      map[string]interface{} `json:"metadata,omitempty"`
-		Input         interface{}            `json:"input,omitempty"`
-		Output        interface{}            `json:"output,omitempty"`
-		Level         *Level                 `json:"level,omitempty"`
-		StatusMessage *string                `json:"statusMessage,omitempty"`
-	}{
+	updateSpan := spanUpsert{
 		ID:            spanID,
 		Name:          span.Name,
 		EndTime:       span.EndTime,
@@ -381,21 +354,7 @@ func (c *Client) UpdateSpan(ctx context.Context, spanID string, span SpanUpdate)
 // UpdateGeneration updates an existing generation by posting with the same ID (upsert)
 func (c *Client) UpdateGeneration(ctx context.Context, generationID string, generation GenerationUpdate) (*GenerationResponse, error) {
 	// Create a generation with the ID and update fields
-	updateGen := struct {
-		ID              string                 `json:"id"`
-		Name            *string                `json:"name,omitempty"`
-		EndTime         *time.Time             `json:"endTime,omitempty"`
-		Model           *string                `json:"model,omitempty"`
-		ModelParameters map[string]interface{} `json:"modelParameters,omitempty"`
-		Input           interface{}            `json:"input,omitempty"`
-		Output          interface{}            `json:"output,omitempty"`
-		Metadata        map[string]interface{} `json:"metadata,omitempty"`
-		Level           *Level                 `json:"level,omitempty"`
-		StatusMessage   *string                `json:"statusMessage,omitempty"`
-		Usage           *Usage                 `json:"usage,omitempty"`
-		Prompt          *Prompt                `json:"prompt,omitempty"`
-		Completion      *Completion            `json:"completion,omitempty"`
-	}{
+	updateGen := generationUpsert{
 		ID:              generationID,
 		Name:            generation.Name,
 		EndTime:         generation.EndTime,
