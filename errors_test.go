@@ -53,6 +53,26 @@ func TestIsAPIError(t *testing.T) {
 	}
 }
 
+func TestAPIError_Error_WithoutBody(t *testing.T) {
+	err := &APIError{StatusCode: 500, Message: "server error"}
+	msg := err.Error()
+	if msg == "" {
+		t.Error("APIError.Error() should return non-empty string when Body is empty")
+	}
+	// Should not include a dash separator when body is absent
+	expected := "langfuse API error (status 500): server error"
+	if msg != expected {
+		t.Errorf("APIError.Error() = %q, want %q", msg, expected)
+	}
+}
+
+func TestAPIError_Unwrap(t *testing.T) {
+	err := &APIError{StatusCode: 400, Message: "bad request"}
+	if err.Unwrap() != nil {
+		t.Error("APIError.Unwrap() should return nil")
+	}
+}
+
 type testError struct {
 	msg string
 }

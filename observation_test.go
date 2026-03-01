@@ -978,3 +978,147 @@ func TestStartObservation_UnknownType(t *testing.T) {
 		t.Error("StartObservation() with unknown type should return error")
 	}
 }
+
+func TestObservation_Context(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	obs, err := client.StartObservation(context.Background(), ObservationTypeSpan, "ctx-test", nil)
+	if err != nil {
+		t.Fatalf("StartObservation() error = %v", err)
+	}
+
+	ctx := obs.Context()
+	if ctx == nil {
+		t.Fatal("Observation.Context() returned nil")
+	}
+	// The context should carry the trace info
+	traceCtx, ok := GetTraceContext(ctx)
+	if !ok {
+		t.Error("Observation.Context() should embed trace context")
+	}
+	if traceCtx.TraceID == "" {
+		t.Error("Observation.Context() trace context should have a TraceID")
+	}
+}
+
+func TestUpdateCurrentSpan_NoContext(t *testing.T) {
+	client, err := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	err = client.UpdateCurrentSpan(context.Background(), "output", nil)
+	if err == nil {
+		t.Error("UpdateCurrentSpan() expected error when no observation in context, got nil")
+	}
+}
+
+func TestUpdateCurrentSpan_ViaTraceContext(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	// Put a TraceContext (with SpanID) in context but no Observation
+	ctx := WithTraceContext(context.Background(), TraceContext{
+		TraceID: "trace-abc",
+		SpanID:  "span-xyz",
+	})
+
+	err := client.UpdateCurrentSpan(ctx, "output-value", map[string]interface{}{"key": "val"})
+	if err != nil {
+		t.Errorf("UpdateCurrentSpan() via trace context error = %v", err)
+	}
+}
+
+func TestUpdateCurrentSpan_WithSpanObservation(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	obs, err := client.StartObservation(context.Background(), ObservationTypeSpan, "span-obs", nil)
+	if err != nil {
+		t.Fatalf("StartObservation() error = %v", err)
+	}
+
+	ctx := WithCurrentObservation(obs.Context(), obs)
+	err = client.UpdateCurrentSpan(ctx, "span-output", nil)
+	if err != nil {
+		t.Errorf("UpdateCurrentSpan() with span observation error = %v", err)
+	}
+}
+
+func TestUpdateCurrentSpan_WithGenerationObservation(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	obs, err := client.StartObservation(context.Background(), ObservationTypeGeneration, "gen-obs", nil)
+	if err != nil {
+		t.Fatalf("StartObservation() error = %v", err)
+	}
+
+	ctx := WithCurrentObservation(obs.Context(), obs)
+	err = client.UpdateCurrentSpan(ctx, "gen-output", nil)
+	if err != nil {
+		t.Errorf("UpdateCurrentSpan() with generation observation error = %v", err)
+	}
+}
+
+func TestStartAsCurrentSpan(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	ctx, obs, err := client.StartAsCurrentSpan(context.Background(), "current-span", map[string]interface{}{"input": "data"})
+	if err != nil {
+		t.Fatalf("StartAsCurrentSpan() error = %v", err)
+	}
+	if obs.Type != ObservationTypeSpan {
+		t.Errorf("StartAsCurrentSpan() Type = %s, want span", obs.Type)
+	}
+
+	retrieved, ok := GetCurrentObservation(ctx)
+	if !ok {
+		t.Error("StartAsCurrentSpan() observation not stored in context")
+	}
+	if retrieved.ID != obs.ID {
+		t.Errorf("StartAsCurrentSpan() retrieved ID = %s, want %s", retrieved.ID, obs.ID)
+	}
+}
+
+func TestStartAsCurrentSpan_WithPropagatedAttributes(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	// Set propagated attributes in the context before starting
+	ctx := WithPropagatedAttributes(context.Background(), PropagatedAttributes{
+		SessionID: "session-1",
+		Metadata:  map[string]interface{}{"env": "test"},
+	})
+
+	_, obs, err := client.StartAsCurrentSpan(ctx, "span-with-attrs", nil)
+	if err != nil {
+		t.Fatalf("StartAsCurrentSpan() with propagated attrs error = %v", err)
+	}
+	if obs == nil {
+		t.Error("StartAsCurrentSpan() returned nil observation")
+	}
+}
+
+func TestStartAsCurrentGeneration(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	ctx, obs, err := client.StartAsCurrentGeneration(context.Background(), "current-gen", "gpt-4", map[string]interface{}{"prompt": "hello"})
+	if err != nil {
+		t.Fatalf("StartAsCurrentGeneration() error = %v", err)
+	}
+	if obs.Type != ObservationTypeGeneration {
+		t.Errorf("StartAsCurrentGeneration() Type = %s, want generation", obs.Type)
+	}
+
+	retrieved, ok := GetCurrentObservation(ctx)
+	if !ok {
+		t.Error("StartAsCurrentGeneration() observation not stored in context")
+	}
+	if retrieved.ID != obs.ID {
+		t.Errorf("StartAsCurrentGeneration() retrieved ID = %s, want %s", retrieved.ID, obs.ID)
+	}
+}

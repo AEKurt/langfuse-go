@@ -462,6 +462,69 @@ func TestAsyncClient(t *testing.T) {
 	}
 }
 
+func TestBatchProcessor_StartAlreadyRunning(t *testing.T) {
+	client, _ := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	bp := NewBatchProcessor(client, BatchConfig{FlushInterval: 1 * time.Hour})
+
+	bp.Start()
+	bp.Start() // second call should be a no-op
+
+	_ = bp.Stop()
+}
+
+func TestBatchProcessor_StopAlreadyStopped(t *testing.T) {
+	client, _ := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	bp := NewBatchProcessor(client, BatchConfig{FlushInterval: 1 * time.Hour})
+
+	// Never started — Stop should return nil immediately
+	err := bp.Stop()
+	if err != nil {
+		t.Errorf("Stop() on unstarted processor error = %v", err)
+	}
+}
+
+func TestBatchProcessor_FlushEmpty(t *testing.T) {
+	client, _ := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	bp := NewBatchProcessor(client, BatchConfig{})
+	bp.Start()
+	defer func() { _ = bp.Stop() }()
+
+	// Flushing an empty queue should be a no-op
+	err := bp.Flush()
+	if err != nil {
+		t.Errorf("Flush() on empty queue error = %v", err)
+	}
+}
+
+func TestNewAsyncClient_InvalidConfig(t *testing.T) {
+	_, err := NewAsyncClient(Config{}, BatchConfig{})
+	if err == nil {
+		t.Error("NewAsyncClient() with empty Config should return error")
+	}
+}
+
+func TestAsyncClient_BatchProcessorAccessor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(BatchResponse{Successes: 1})
+	}))
+	defer server.Close()
+
+	ac, err := NewAsyncClient(
+		Config{PublicKey: "pk-test", SecretKey: "sk-test", BaseURL: server.URL},
+		BatchConfig{},
+	)
+	if err != nil {
+		t.Fatalf("NewAsyncClient() error = %v", err)
+	}
+	defer func() { _ = ac.Shutdown() }()
+
+	bp := ac.BatchProcessor()
+	if bp == nil {
+		t.Error("BatchProcessor() should return non-nil BatchProcessor")
+	}
+}
+
 func TestAsyncClient_ConcurrentWrites(t *testing.T) {
 	var requestCount int32
 

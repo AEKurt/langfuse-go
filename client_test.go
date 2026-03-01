@@ -156,6 +156,75 @@ func TestClient_CreateTrace_Error(t *testing.T) {
 	}
 }
 
+func TestClient_FlushAndShutdown(t *testing.T) {
+	client, err := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if err := client.Flush(); err != nil {
+		t.Errorf("Flush() error = %v", err)
+	}
+	if err := client.Shutdown(); err != nil {
+		t.Errorf("Shutdown() error = %v", err)
+	}
+}
+
+func TestClient_Score_MissingName(t *testing.T) {
+	client, err := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.Score(context.Background(), Score{TraceID: "trace-1", Value: 1.0})
+	if err == nil {
+		t.Error("Score() expected error when name is missing, got nil")
+	}
+}
+
+func TestClient_WithLogger(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(TraceResponse{ID: "trace-logged"})
+	}))
+	defer server.Close()
+
+	logger := &captureLogger{}
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+		Logger:    logger,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.CreateTrace(context.Background(), Trace{Name: "logged-trace"})
+	if err != nil {
+		t.Fatalf("CreateTrace() error = %v", err)
+	}
+	if len(logger.requests) == 0 {
+		t.Error("Logger.LogRequest was not called")
+	}
+	if len(logger.responses) == 0 {
+		t.Error("Logger.LogResponse was not called")
+	}
+}
+
+// captureLogger records log calls for assertions.
+type captureLogger struct {
+	requests  []string
+	responses []int
+}
+
+func (l *captureLogger) LogRequest(method, url string, body interface{}) {
+	l.requests = append(l.requests, method+" "+url)
+}
+
+func (l *captureLogger) LogResponse(statusCode int, body []byte, err error) {
+	l.responses = append(l.responses, statusCode)
+}
+
 func TestClient_UpdateTrace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// UpdateTrace uses POST with ID in body (upsert behavior)
