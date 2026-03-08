@@ -359,6 +359,190 @@ func TestBatchProcessor_QueueFull(t *testing.T) {
 	_ = bp.Stop()
 }
 
+func TestBatchProcessor_sendBatch_EmptyEvents(t *testing.T) {
+	client, _ := NewClient(Config{PublicKey: "pk-test", SecretKey: "sk-test"})
+	bp := NewBatchProcessor(client, BatchConfig{})
+
+	err := bp.sendBatch([]BatchEvent{})
+	if err != nil {
+		t.Errorf("sendBatch(empty) error = %v, want nil", err)
+	}
+}
+
+func TestBatchProcessor_sendBatch_WithLogger(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(BatchResponse{Successes: 1})
+	}))
+	defer server.Close()
+
+	logger := &captureLogger{}
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+		Logger:    logger,
+	})
+
+	bp := NewBatchProcessor(client, BatchConfig{})
+	err := bp.sendBatch([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+	if err != nil {
+		t.Fatalf("sendBatch() error = %v", err)
+	}
+	if len(logger.requests) == 0 {
+		t.Error("Logger.LogRequest was not called for batch request")
+	}
+	if len(logger.responses) == 0 {
+		t.Error("Logger.LogResponse was not called for batch response")
+	}
+}
+
+func TestBatchProcessor_sendBatch_LoggerOnHTTPError(t *testing.T) {
+	// Closed server to trigger HTTP error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	serverURL := server.URL
+	server.Close()
+
+	logger := &captureLogger{}
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   serverURL,
+		Logger:    logger,
+	})
+
+	bp := NewBatchProcessor(client, BatchConfig{})
+	err := bp.sendBatch([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+	if err == nil {
+		t.Error("sendBatch() expected error for closed server, got nil")
+	}
+	if len(logger.responses) == 0 {
+		t.Error("Logger.LogResponse was not called on HTTP error")
+	}
+	if logger.responses[0] != 0 {
+		t.Errorf("Logger.LogResponse status = %d, want 0", logger.responses[0])
+	}
+}
+
+func TestBatchProcessor_RetryOn429(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&requestCount, 1)
+		if count == 1 {
+			w.WriteHeader(http.StatusTooManyRequests) // 429
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(BatchResponse{Successes: 1})
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+
+	bp := NewBatchProcessor(client, BatchConfig{
+		MaxRetries: 3,
+		RetryDelay: 1 * time.Millisecond,
+	})
+
+	bp.sendBatchWithRetry([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+
+	if atomic.LoadInt32(&requestCount) < 2 {
+		t.Errorf("Expected at least 2 requests (retry on 429), got %d", requestCount)
+	}
+}
+
+func TestBatchProcessor_NoRetryOnClientError(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusBadRequest) // 400 — should not retry
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+
+	var errorCalled bool
+	bp := NewBatchProcessor(client, BatchConfig{
+		MaxRetries: 3,
+		RetryDelay: 1 * time.Millisecond,
+		OnError: func(err error, events []BatchEvent) {
+			errorCalled = true
+		},
+	})
+
+	bp.sendBatchWithRetry([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Errorf("Expected exactly 1 request (no retry on 400), got %d", requestCount)
+	}
+	if !errorCalled {
+		t.Error("OnError callback was not called after non-retryable error")
+	}
+}
+
+func TestBatchProcessor_AllRetriesFail_NoCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError) // always 500
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+
+	bp := NewBatchProcessor(client, BatchConfig{
+		MaxRetries: 1,
+		RetryDelay: 1 * time.Millisecond,
+		// OnError is nil — should not panic
+	})
+
+	// Should not panic
+	bp.sendBatchWithRetry([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+}
+
+func TestBatchProcessor_sendBatch_MultiStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus) // 207
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+
+	bp := NewBatchProcessor(client, BatchConfig{})
+	err := bp.sendBatch([]BatchEvent{
+		{ID: "e1", Type: BatchEventTypeTrace, Timestamp: time.Now(), Body: Trace{Name: "test"}},
+	})
+	if err != nil {
+		t.Errorf("sendBatch() with 207 status error = %v, want nil", err)
+	}
+}
+
 func TestAsyncClient(t *testing.T) {
 	var requestCount int32
 

@@ -164,3 +164,66 @@ func TestGetFunctionName_NonFunc(t *testing.T) {
 		t.Errorf("getFunctionName() for non-func = %v, want unknown-function", name)
 	}
 }
+
+func TestObserve_GenerationWithError(t *testing.T) {
+	_, client := newObserveServer(t)
+
+	fn := func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("generation failed")
+	}
+
+	_, err := client.Observe(context.Background(), fn, &ObserveOptions{
+		Name:          "gen-with-error",
+		AsType:        ObservationTypeGeneration,
+		CaptureInput:  true,
+		CaptureOutput: true,
+	})
+	if err == nil {
+		t.Error("Observe() expected error from wrapped function, got nil")
+	}
+	if err.Error() != "generation failed" {
+		t.Errorf("Observe() error = %v, want 'generation failed'", err)
+	}
+}
+
+func TestObserve_NoCaptureInput(t *testing.T) {
+	_, client := newObserveServer(t)
+
+	fn := func(ctx context.Context) (string, error) {
+		return "result", nil
+	}
+
+	result, err := client.Observe(context.Background(), fn, &ObserveOptions{
+		Name:          "no-input-capture",
+		AsType:        ObservationTypeSpan,
+		CaptureInput:  false,
+		CaptureOutput: true,
+	})
+	if err != nil {
+		t.Errorf("Observe() error = %v", err)
+	}
+	if result != "result" {
+		t.Errorf("Observe() result = %v, want result", result)
+	}
+}
+
+func TestObserve_NoCaptureOutput(t *testing.T) {
+	_, client := newObserveServer(t)
+
+	fn := func(ctx context.Context) (string, error) {
+		return "result", nil
+	}
+
+	result, err := client.Observe(context.Background(), fn, &ObserveOptions{
+		Name:          "no-output-capture",
+		AsType:        ObservationTypeSpan,
+		CaptureInput:  true,
+		CaptureOutput: false,
+	})
+	if err != nil {
+		t.Errorf("Observe() error = %v", err)
+	}
+	if result != "result" {
+		t.Errorf("Observe() result = %v, want result", result)
+	}
+}
