@@ -1122,3 +1122,43 @@ func TestStartAsCurrentGeneration(t *testing.T) {
 		t.Errorf("StartAsCurrentGeneration() retrieved ID = %s, want %s", retrieved.ID, obs.ID)
 	}
 }
+
+func TestObservation_Update_UnknownType(t *testing.T) {
+	obs := &Observation{
+		Type: ObservationType("unknown"),
+		ID:   "obs-1",
+	}
+
+	err := obs.Update(SpanUpdate{Output: "data"})
+	if err == nil {
+		t.Error("Update() with unknown type should return error")
+	}
+}
+
+func TestObservation_End_UnknownType(t *testing.T) {
+	obs := &Observation{
+		Type: ObservationType("unknown"),
+		ID:   "obs-1",
+	}
+
+	err := obs.End()
+	if err == nil {
+		t.Error("End() with unknown type should return error")
+	}
+}
+
+func TestUpdateCurrentSpan_WithEventObservation(t *testing.T) {
+	server, client := createTestServer(t)
+	defer server.Close()
+
+	obs, err := client.StartObservation(context.Background(), ObservationTypeEvent, "event-obs", nil)
+	if err != nil {
+		t.Fatalf("StartObservation() error = %v", err)
+	}
+
+	ctx := WithCurrentObservation(obs.Context(), obs)
+	err = client.UpdateCurrentSpan(ctx, "event-output", nil)
+	if err != nil {
+		t.Errorf("UpdateCurrentSpan() with event observation should return nil, got error = %v", err)
+	}
+}

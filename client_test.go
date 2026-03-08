@@ -3,6 +3,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -223,6 +224,366 @@ func (l *captureLogger) LogRequest(method, url string, body interface{}) {
 
 func (l *captureLogger) LogResponse(statusCode int, body []byte, err error) {
 	l.responses = append(l.responses, statusCode)
+}
+
+func TestClient_doRequest_ContextCancelled(t *testing.T) {
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   "http://localhost:1", // won't actually connect
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err = client.doRequest(ctx, "GET", "/test", nil)
+	if err == nil {
+		t.Error("doRequest() expected error for cancelled context, got nil")
+	}
+}
+
+func TestClient_doRequest_MarshalError(t *testing.T) {
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	// math.Inf cannot be marshaled to JSON
+	body := map[string]interface{}{
+		"bad": math.Inf(1),
+	}
+	_, err = client.doRequest(context.Background(), "POST", "/test", body)
+	if err == nil {
+		t.Error("doRequest() expected marshal error, got nil")
+	}
+}
+
+func TestClient_doRequest_LoggerOnHTTPError(t *testing.T) {
+	// Create a server and immediately close it so connection fails
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	serverURL := server.URL
+	server.Close()
+
+	logger := &captureLogger{}
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   serverURL,
+		Logger:    logger,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.doRequest(context.Background(), "GET", "/test", nil)
+	if err == nil {
+		t.Error("doRequest() expected error for closed server, got nil")
+	}
+	// Logger should have been called with error (status code 0)
+	if len(logger.responses) == 0 {
+		t.Error("Logger.LogResponse was not called on HTTP error")
+	}
+	if logger.responses[0] != 0 {
+		t.Errorf("Logger.LogResponse status = %d, want 0", logger.responses[0])
+	}
+}
+
+func TestClient_handleResponse_MalformedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not valid json`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.doRequest(context.Background(), "GET", "/test", nil)
+	if err != nil {
+		t.Fatalf("doRequest() error = %v", err)
+	}
+
+	var result map[string]string
+	err = client.handleResponse(resp, &result, false)
+	if err == nil {
+		t.Error("handleResponse() expected decode error for malformed JSON, got nil")
+	}
+	// Should NOT be an APIError since status was 200
+	if IsAPIError(err) {
+		t.Error("handleResponse() error should not be APIError for decode failure")
+	}
+}
+
+func TestClient_CreateTrace_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(TraceResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.CreateTrace(context.Background(), Trace{Name: "auto-id"})
+	if err != nil {
+		t.Fatalf("CreateTrace() error = %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("CreateTrace() should use auto-generated ID when server returns empty")
+	}
+}
+
+func TestClient_CreateSpan_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(SpanResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.CreateSpan(context.Background(), Span{Name: "auto-id"})
+	if err != nil {
+		t.Fatalf("CreateSpan() error = %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("CreateSpan() should use auto-generated ID when server returns empty")
+	}
+}
+
+func TestClient_CreateGeneration_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(GenerationResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.CreateGeneration(context.Background(), Generation{Name: "auto-id"})
+	if err != nil {
+		t.Fatalf("CreateGeneration() error = %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("CreateGeneration() should use auto-generated ID when server returns empty")
+	}
+}
+
+func TestClient_CreateEvent_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(EventResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.CreateEvent(context.Background(), Event{Name: "auto-id"})
+	if err != nil {
+		t.Fatalf("CreateEvent() error = %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("CreateEvent() should use auto-generated ID when server returns empty")
+	}
+}
+
+func TestClient_CreateEvent_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error": "invalid"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.CreateEvent(context.Background(), Event{Name: "test"})
+	if err == nil {
+		t.Error("CreateEvent() expected error, got nil")
+	}
+	if !IsAPIError(err) {
+		t.Error("CreateEvent() expected APIError")
+	}
+}
+
+func TestClient_Score_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(ScoreResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.Score(context.Background(), Score{Name: "test-score", TraceID: "t1", Value: 0.5})
+	if err != nil {
+		t.Fatalf("Score() error = %v", err)
+	}
+	if resp.ID == "" {
+		t.Error("Score() should use auto-generated ID when server returns empty")
+	}
+}
+
+func TestClient_Score_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error": "internal"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.Score(context.Background(), Score{Name: "test-score", TraceID: "t1", Value: 0.5})
+	if err == nil {
+		t.Error("Score() expected error, got nil")
+	}
+	if !IsAPIError(err) {
+		t.Error("Score() expected APIError")
+	}
+}
+
+func TestClient_UpdateTrace_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(TraceResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	name := "updated"
+	resp, err := client.UpdateTrace(context.Background(), "trace-abc", TraceUpdate{Name: &name})
+	if err != nil {
+		t.Fatalf("UpdateTrace() error = %v", err)
+	}
+	if resp.ID != "trace-abc" {
+		t.Errorf("UpdateTrace() ID = %v, want trace-abc", resp.ID)
+	}
+}
+
+func TestClient_UpdateSpan_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(SpanResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.UpdateSpan(context.Background(), "span-abc", SpanUpdate{Output: "data"})
+	if err != nil {
+		t.Fatalf("UpdateSpan() error = %v", err)
+	}
+	if resp.ID != "span-abc" {
+		t.Errorf("UpdateSpan() ID = %v, want span-abc", resp.ID)
+	}
+}
+
+func TestClient_UpdateGeneration_AutoID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(GenerationResponse{ID: ""})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.UpdateGeneration(context.Background(), "gen-abc", GenerationUpdate{Output: "data"})
+	if err != nil {
+		t.Fatalf("UpdateGeneration() error = %v", err)
+	}
+	if resp.ID != "gen-abc" {
+		t.Errorf("UpdateGeneration() ID = %v, want gen-abc", resp.ID)
+	}
 }
 
 func TestClient_UpdateTrace(t *testing.T) {
